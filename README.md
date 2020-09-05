@@ -4,8 +4,8 @@ As 3d LSTMs work for generating pixels, would have to have a 'rotated' 3d LStm t
 2 main challenges:
   expand 2d pixel generation for video (add time dim)
   account for geometry of station's location data not being grid aligned,
-  	  want to predict for different locations than stations are? 
-
+  	  want to predict for different locations than stations are?
+  
 Todo:
 Get more clear on how bert was trained, time/spatial is conflated for text processing, how about for pixel/video generation?
 
@@ -20,6 +20,7 @@ Preprocessing:
 Figure out archetecture
        ?Have some way to account for how geographic relationship varies between stations?
        ?Just use 2d/8 surrounding cells, as what's done for predicting the next pixel. network learn this automatically from how much weight to place on related cells?
+       	?Shrink size of cells so that all stations within a single cell, and most cell inputs are null?
 
 get electricity price data
 Add CNN on stations to price data and see what happens.
