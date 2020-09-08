@@ -21,7 +21,7 @@ Figure out archetecture
        ?Have some way to account for how geographic relationship varies between stations?
        ?Just use 2d/8 surrounding cells, as what's done for predicting the next pixel. network learn this automatically from how much weight to place on related cells?
        	?Shrink size of cells so that all stations within a single cell, and most cell inputs are null?
-
+Compare new Archeteture to existing sklearn SVM/decision tree's predictions. 
 get electricity price data
 Add CNN on stations to price data and see what happens.
 Profit.
