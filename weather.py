@@ -15,7 +15,7 @@ import pdb
 abs_path = "C:\\Users\\student.DESKTOP-UT02KBN\\Desktop\\electric_price_preds\\data"
 
 def save_struct(struct, name):
-    "handler to pickle data"
+    "handler to pickle data, will overwrite"
     d = os.getcwd()
     os.chdir(abs_path)
     if isinstance(struct, pd.DataFrame) or isinstance(struct, pd.Series):
@@ -35,20 +35,26 @@ def load_struct(name):
         return pd.read_pickle(f'{name}.p')
     os.chdir(d)
 
-def reprocess_struct(name):
-    "Deletes pickled data so data_handler will reload it"
+def delete_struct(name, verbal = True):
+    "Deletes pickled data"
     d = os.getcwd()
     os.chdir(abs_path)
     try:
         os.remove(f"{name}.p")
     except Exception as e:
-        print(f"{name} alread removed", e)
+        if verbal:
+            print(f"{name} alread removed", e)
     try:
         exec(f"del {name}")
     except:
         pass
-    data_handler(data_structs = [name])
     os.chdir(d)
+
+def reprocess_struct(name):
+    "calls data_handler to reload name"
+    delete_struct(name)
+    data = data_handler(data_structs = [name])
+    save_struct(data, name)
         
 #%%
 weather_token = "XUxckTkzjdLZvkPvtIpjVwRSawSPGETi"
@@ -61,21 +67,33 @@ headers = {'token': 'XUxckTkzjdLZvkPvtIpjVwRSawSPGETi'}
 #stationid=COOP:310090
 default_lmt_sz = 25
 max_lmt_sz = 1000
+max_reqs_sec = 5#NOAA caps at 5 requests per second
 
 def make_request(requrl):
-    "Makes request w/ requrl added to end of url"
+    """"Makes request w/ requrl added to end of url
+    in API limit is number of results returned
+    offset is what ix# they start at"""
+    
     if requrl[:5] != 'https':
         requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/' + requrl
     assert(requrl[:41] == 'https://www.ncdc.noaa.gov/cdo-web/api/v2/')
 # &includeStationLocation=1
+    print(requrl)
     return requests.get(requrl, headers = {'token': weather_token})
 
     
-def explore_reqs(requrl, dates=False, limit=100):
-    if limit != None and 'limit' not in requrl:
-        requrl += f"&limit={limit}"
-    if (dates or 'data' in requrl) and 'date' not in requrl:#dates required for data requests
-        requrl += f"&{yesterstr}&{todaystr}"
+def explore_reqs(requrl, dates=False, limit=None):
+    "append requests w/ '?' if it's adding additional information after the first category split (i.e. 1 word after a '/' use ?, else '&')"
+    if limit is not None and 'limit' not in requrl:
+        if '?' in requrl:
+            requrl += f"&limit={limit}"
+        else:
+            requrl += f"?limit={limit}"
+    if (dates or 'data?' in requrl ) and 'date' not in requrl:#dates required for data requests
+        if '?' in requrl:
+            requrl += f"&{yesterstr}&{todaystr}"
+        else:
+            requrl += f"?{yesterstr}&{todaystr}"
     out = make_request(requrl)
     # pdb.set_trace()
     try:
@@ -120,14 +138,15 @@ def write_pickle_file(filename, data, index = None):
             f.close()
 
 def get_date_stat_val(req):
-    "given a request returns list of date, station, and value"
+    "given a request in json, returns list of date, station, and value"
     tup_data = [(datetime.strptime(i['date'], "%Y-%m-%dT%H:%M:%S"),
                 i['station'],
                 i['value'])
                 for i in req.json()['results']]
     return list(zip(*tup_data))
 
-def iter_thru_req(requrl, maxresults = 365*835, index_name = None, col_names = None ):
+def iter_thru_req(requrl, maxresults = None, offset = 0,
+                  col_names = None, index_name = None):
     """"gets all count values in requrl, returns a dataframe with those values
     index_name: the name of colum to use as index
     col_names: the names of the columns to keep from what's returned
@@ -136,11 +155,13 @@ def iter_thru_req(requrl, maxresults = 365*835, index_name = None, col_names = N
     if requrl[:5] != 'https':
         requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/' + requrl
     assert(requrl[:41] == 'https://www.ncdc.noaa.gov/cdo-web/api/v2/')
-    assert('offset' not in requrl)
-    
-    requrl = re.sub("limit=\d+", "limit=1", requrl)
+    assert('limit' not in requrl)
+    requrl += '&limit=' + str(max_lmt_sz) #NOAA only limits number of calls, not size
+    if 'offset' not in requrl:
+        requrl += '&offset=' + str(offset)
+    else:
+        requrl = re.sub("offset=\d+", f"offset={offset}", requrl)
     first_js = requests.get(requrl, headers = {'token': weather_token}).json()
-    requrl = re.sub("limit=\d+", "limit=1000", requrl)
     
     if col_names is None:
         col_names = list(first_js['results'][0].keys())
@@ -151,41 +172,70 @@ def iter_thru_req(requrl, maxresults = 365*835, index_name = None, col_names = N
     if index_name is not None:
         assert index_name in col_names, f"""col for Index not in {col_names}"""
     
-    size = min(first_js['metadata']['resultset']['count'], maxresults)
-    offset = 1
-    incremented_by = 0
-    data = []
-    while offset + incremented_by < size:
-        js = requests.get(requrl, headers = {'token': weather_token}).json()
-        data += js['results']
-        
-        offset = js['metadata']['resultset']['offset']
+    size = first_js['metadata']['resultset']['count']
+    if maxresults:
+        size = min(size, maxresults)
+    data = first_js['results']
+    offset += len(data) 
+    requrl += '&includemetadata=false'#faster
+    #what if size changes partway through requests? i.e. more data's added?
+    num_fails = 0
+    while offset < size:
         try:
-            incremented_by = js['metadata']['resultset']['limit']
-        except:
-            incremented_by = default_lmt_sz
-        offset += incremented_by
-        new_limit = min(1000, size - offset)#maximium value 
-        
-        if 'limit' in requrl:
+            js = requests.get(requrl, headers = {'token': weather_token}).json()
+            data += js['results']
+            new_limit = min(max_lmt_sz, size - offset)#maximium value 
+            offset += new_limit
             requrl = re.sub("limit=\d+", f"limit={new_limit}", requrl)
-        else:
-            requrl += '&limit=' + str(new_limit)
-        if 'offset' in requrl:
             requrl = re.sub("offset=\d+", f"offset={offset}", requrl)
-        else:
-            requrl += '&offset=' + str(offset)
-            
-   
+        except Exception as e:
+            num_fails += 1
+            print(f"Failed on {requrl}, @{offset}", e, '\n\n')
+            try:
+                prev_data = load_struct("_temp_data_save")
+                data = prev_data + data #preserve order
+            except:
+                pass
+            save_struct(data, "_temp_data_save")
+            data = []
+            time.sleep(3)  
+        time.sleep(1/max_reqs_sec)
+    try:
+        prev_data = load_struct("_temp_data_save")
+        data = prev_data + data #preserve order
+    except:
+        pass
     out = pd.DataFrame(data, columns = col_names)
     for c in out.columns:
         if 'date' in c:
             out.loc[:,c] = pd.to_datetime(out.loc[:,c], format="%Y-%m-%d")
     if index_name is not None:
         out = out.set_index(index_name)
-    return out, frst_req
+    delete_struct("_temp_data_save", verbal = False)
+    #rearrange datatypes from being indentifier in 1 col, to each having individual col
+    # out = out.pivot(index = 'date', columns = 'datatype')
+    # out.columns = out.columns.map("_".join)
+    # station_cols = [i for i in out if 'station' in i]
+    # out['station'] = out[station_cols].fillna(axis=0, method = 'bfill').iloc[:,0]
+    # out = out.drop(station_cols, axis=1)
+    
+    #am removing 'attributes' column here; don't know what they do
+    return out.pivot_table(index = ['date', 'station'], 
+                           columns = 'datatype', 
+                           values = 'value') #doesn't work w/ non numeric columns?
 
-requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1000' + '&' + yesterstr + '&' + todaystr + '&locationid=FIPS:37'
+precipitation_data = []
+for yr in range(1971, 2015):
+    start = f'{yr}-01-01'
+    end = f'{yr+1}-01-01'
+    requrl = f'https://www.ncdc.noaa.gov/cdo-web/api/v2/data?datasetid=PRECIP_15&startdate={start}&enddate={end}'
+    temp = iter_thru_req(requrl)
+    save_struct(temp, f"precipitation_data_yr{yr}")
+    precipitation_data += [temp]
+    
+#filter out 999's
+
+ # requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1000' + '&' + yesterstr + '&' + todaystr + '&locationid=FIPS:37'
 # station_df, req = iter_thru_req(requrl, maxresults = 1000)#currently 577 WA stations 
 #station_df.to_csv(r'Desktop\side_projects\station_latlon.txt', index = None)
 #save_struct(station_df, 'stations')
