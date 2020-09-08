@@ -73,17 +73,18 @@ def make_request(requrl):
     
 def explore_reqs(requrl, dates=False, limit=100):
     if limit != None and 'limit' not in requrl:
-        requrl += f"?limit={limit}"
-    if dates and 'date' not in requrl:
+        requrl += f"&limit={limit}"
+    if (dates or 'data' in requrl) and 'date' not in requrl:#dates required for data requests
         requrl += f"&{yesterstr}&{todaystr}"
     out = make_request(requrl)
+    # pdb.set_trace()
     try:
         return out.json()
     except Exception as e:
-        print(e, out.status_code, out.content)
-        return None
+        print(e, out.status_code, out.content, sep="\n")
+        return -1
 
-# datacategories = explore_reqs("datacategories", dates=False).json()
+# datacategories = explore_reqs("datacategories", dates=False)
 
 datacategories 
 #%%
@@ -120,15 +121,11 @@ def write_pickle_file(filename, data, index = None):
 
 def get_date_stat_val(req):
     "given a request returns list of date, station, and value"
-    adate = [datetime.strptime(i['date'], "%Y-%m-%dT00:00:00") for i in req.json()['results']]
-    astation= [i['station'] for i in req.json()['results']]
-    aval = pd.to_numeric([i['value'] for i in req.json()['results']])
-    return adate, astation, aval
-    # tup_dta = [(datetime.strptime(i['date'], "%Y-%m-%dT00:00:00"),
-    #             i['station'],
-    #             i['value'])
-    #             for i in req.json()['results']]
-    # return list(zip(tup_data))
+    tup_data = [(datetime.strptime(i['date'], "%Y-%m-%dT%H:%M:%S"),
+                i['station'],
+                i['value'])
+                for i in req.json()['results']]
+    return list(zip(*tup_data))
 
 def iter_thru_req(requrl, maxresults = 365*835, index_name = None, col_names = None ):
     """"gets all count values in requrl, returns a dataframe with those values
