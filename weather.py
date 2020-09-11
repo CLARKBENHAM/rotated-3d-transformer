@@ -57,17 +57,19 @@ def reprocess_struct(name):
     save_struct(data, name)
         
 #%%
-weather_token = "XUxckTkzjdLZvkPvtIpjVwRSawSPGETi"
 baseurl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/'
 today_dt = datetime.strftime(datetime.now(), "%Y-%m-%d")#gets date from yesturday to today, yyyy-mm-dd
 yester_dt = datetime.strftime(datetime.now() - timedelta(days=4), "%Y-%m-%d")
 todaystr = 'enddate=' + today_dt
 yesterstr = 'startdate=' + yester_dt
+weather_token = "XUxckTkzjdLZvkPvtIpjVwRSawSPGETi"
 headers = {'token': 'XUxckTkzjdLZvkPvtIpjVwRSawSPGETi'}
-#stationid=COOP:310090
+
 default_lmt_sz = 25
 max_lmt_sz = 1000
 max_reqs_sec = 5#NOAA caps at 5 requests per second
+max_reqs_day = 5#10k per day
+temp = 0
 
 def make_request(requrl):
     """"Makes request w/ requrl added to end of url
@@ -78,7 +80,6 @@ def make_request(requrl):
         requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/' + requrl
     assert(requrl[:41] == 'https://www.ncdc.noaa.gov/cdo-web/api/v2/')
 # &includeStationLocation=1
-    print(requrl)
     return requests.get(requrl, headers = {'token': weather_token})
 
     
@@ -102,9 +103,31 @@ def explore_reqs(requrl, dates=False, limit=None):
         print(e, out.status_code, out.content, sep="\n")
         return -1
 
+def make_header(counts = {}):
+    tokens = ["XUxckTkzjdLZvkPvtIpjVwRSawSPGETi",
+              'asdf',
+              'sdfg',
+              'dfgh']
+    counts = {i:counts[i] if i in counts else 0 for i in tokens}
+    tokens = iter(tokens)
+    current = next(tokens)
+    runout = None
+    while True:
+        if runout is not None or counts[current] >= max_reqs_day:
+            try:
+                current = next(tokens)
+            except Exception as e:
+                print(counts)
+                raise e
+        runout = (yield {'token': current})
+        counts[current] += 1
+            
+next_header = make_header()
 # datacategories = explore_reqs("datacategories", dates=False)
 
-datacategories 
+# datacategories 
+
+
 #%%
 def write_info(completed_req, filename):
     "takes a request or a df and writes the info to a file"
@@ -190,7 +213,7 @@ def iter_thru_req(requrl, maxresults = None, offset = 0,
             requrl = re.sub("offset=\d+", f"offset={offset}", requrl)
         except Exception as e:
             num_fails += 1
-            print(f"Failed on {requrl}, @{offset}", e, '\n\n')
+            print(f"{num_fails} Failed on {requrl}, @{offset}", e, '\n\n')
             try:
                 prev_data = load_struct("_temp_data_save")
                 data = prev_data + data #preserve order
@@ -198,7 +221,9 @@ def iter_thru_req(requrl, maxresults = None, offset = 0,
                 pass
             save_struct(data, "_temp_data_save")
             data = []
-            time.sleep(3)  
+            time.sleep(3)
+            if num_fails %5 == 0:
+                time.sleep(30)
         time.sleep(1/max_reqs_sec)
     try:
         prev_data = load_struct("_temp_data_save")
@@ -225,15 +250,21 @@ def iter_thru_req(requrl, maxresults = None, offset = 0,
                            values = 'value') #doesn't work w/ non numeric columns?
 
 precipitation_data = []
-for yr in range(1971, 2015):
+#started at 1970
+for yr in range(1988, 2015):
     start = f'{yr}-01-01'
     end = f'{yr+1}-01-01'
     requrl = f'https://www.ncdc.noaa.gov/cdo-web/api/v2/data?datasetid=PRECIP_15&startdate={start}&enddate={end}'
+    if yr == 1988:
+        requrl += '&offset=20900'
     temp = iter_thru_req(requrl)
     save_struct(temp, f"precipitation_data_yr{yr}")
     precipitation_data += [temp]
-    
-#filter out 999's
+    #Only QPCP data till at least 1988
+
+precipitation_data = pd.concat(precipitation_data)
+precipitation_data[precipitation_data==99999] = np.nan
+save_struct(precipitation_data, 'precipitation_data')
 
  # requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1000' + '&' + yesterstr + '&' + todaystr + '&locationid=FIPS:37'
 # station_df, req = iter_thru_req(requrl, maxresults = 1000)#currently 577 WA stations 
