@@ -274,35 +274,37 @@ def iter_thru_req(requrl, maxresults = None,
                            columns = 'datatype', 
                            values = 'value') #doesn't work w/ non numeric columns?
 
-def get_precipitation_data(offset = 0):
-    """offset: for If want to continue part way through with the first year
-    not completed and that has it's data saved in _temp_data_save 
-    by a partially complete iter_thru_req
+dataset_dates = {i['id']: (i['mindate'], i['maxdate'])
+                 for i in explore_reqs('datasets')['results']}
+
+def get_entire_dataset(dataset_id = 'PRECIP_15', struct_name = 'precipitation_data'):
+    """Gets all data for a dataset with id dataset_id and places in struct_name
     """
     try:
-        return load_struct('precipitation_data')
+        return load_struct(struct_name)
     except:
         pass
     #started at 1970 per API, make 1 call that defines all dates for each data type?
-    start, end = 1970, 2015
-    regex = 'precipitation_data_yr\d+'
-    names, precipitation_data = regex_load_struct(regex)
-    start = 1 + max((int(re.search('\d+', i).group(0)) for i in names), 
+    start, end = dataset_dates[dataset_id]
+    start, end = int(start[:4]), int(end[:4])
+    regex = f'{struct_name}_yr(\d+)'
+    names, data = regex_load_struct(regex)
+    start = 1 + max((int(re.search(regex, i).group(0)) for i in names), 
                     default = start - 1)
     
     for yr in range(start, end):
         start = f'{yr}-01-01'
         end = f'{yr+1}-01-01'
-        requrl = f'https://www.ncdc.noaa.gov/cdo-web/api/v2/data?datasetid=PRECIP_15&startdate={start}&enddate={end}'
+        requrl = f'https://www.ncdc.noaa.gov/cdo-web/api/v2/data?datasetid={dataset_id}&startdate={start}&enddate={end}'
         temp = iter_thru_req(requrl)
-        save_struct(temp, f"precipitation_data_yr{yr}")
-        precipitation_data += [temp]
+        save_struct(temp, f"{struct_name}_yr{yr}")
+        data += [temp]
         #Only QPCP data till at least 1988
     
-    precipitation_data = pd.concat(precipitation_data)
-    precipitation_data[precipitation_data==99999] = np.nan
-    save_struct(precipitation_data, 'precipitation_data')
-    return precipitation_data
+    data = pd.concat(data)
+    data[data==99999] = np.nan
+    save_struct(data, struct_name)
+    return data
 
  # requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1000' + '&' + yesterstr + '&' + todaystr + '&locationid=FIPS:37'
 # station_df, req = iter_thru_req(requrl, maxresults = 1000)#currently 577 WA stations 
