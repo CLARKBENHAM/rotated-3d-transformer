@@ -34,6 +34,22 @@ def load_struct(name):
     except:
         return pd.read_pickle(f'{name}.p')
     os.chdir(d)
+    
+def regex_load_struct(regex):
+    "Returns names, data files matching regex"
+    d = os.getcwd()
+    os.chdir(abs_path)
+    def _get_name(name):
+        try:
+            with open(f'{name}', 'rb') as file:
+                return pickle.load(file)
+        except:
+            return pd.read_pickle(f'{name}')
+    files = [(i, _get_name(i)) for i in os.listdir() if re.match(regex, i)]
+    os.chdir(d)
+    if len(files) == 0:
+        return [], []
+    return (list(i) for i in zip(*files))
 
 def delete_struct(name, verbal = True):
     "Deletes pickled data"
@@ -55,7 +71,7 @@ def reprocess_struct(name):
     delete_struct(name)
     data = data_handler(data_structs = [name])
     save_struct(data, name)
-        
+
 #%%
 baseurl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/'
 today_dt = datetime.strftime(datetime.now(), "%Y-%m-%d")#gets date from yesturday to today, yyyy-mm-dd
@@ -168,7 +184,7 @@ def get_date_stat_val(req):
                 for i in req.json()['results']]
     return list(zip(*tup_data))
 
-def iter_thru_req(requrl, maxresults = None, offset = 0,
+def iter_thru_req(requrl, maxresults = None,
                   col_names = None, index_name = None):
     """"gets all count values in requrl, returns a dataframe with those values
     index_name: the name of colum to use as index
@@ -179,11 +195,26 @@ def iter_thru_req(requrl, maxresults = None, offset = 0,
         requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/' + requrl
     assert(requrl[:41] == 'https://www.ncdc.noaa.gov/cdo-web/api/v2/')
     assert('limit' not in requrl)
-    requrl += '&limit=' + str(max_lmt_sz) #NOAA only limits number of calls, not size
+    
+    save_name = f"_temp_data_save_{requrl}"
+    def save_incomplete_req(data, get = False):
+        try:
+            prev_data = load_struct(save_name)
+            data = prev_data + data #preserve order
+        except:
+            data = []
+        if get:
+            return data
+        else:
+            save_struct(data, save_name) 
+    
+    data = save_incomplete_req([], get = True)
+    offset = len(data)
     if 'offset' not in requrl:
         requrl += '&offset=' + str(offset)
     else:
         requrl = re.sub("offset=\d+", f"offset={offset}", requrl)
+    requrl += '&limit=' + str(max_lmt_sz) #NOAA only limits number of calls, not size
     first_js = requests.get(requrl, headers = {'token': weather_token}).json()
     
     if col_names is None:
@@ -198,7 +229,7 @@ def iter_thru_req(requrl, maxresults = None, offset = 0,
     size = first_js['metadata']['resultset']['count']
     if maxresults:
         size = min(size, maxresults)
-    data = first_js['results']
+    data += first_js['results']
     offset += len(data) 
     requrl += '&includemetadata=false'#faster
     #what if size changes partway through requests? i.e. more data's added?
@@ -211,32 +242,26 @@ def iter_thru_req(requrl, maxresults = None, offset = 0,
             offset += new_limit
             requrl = re.sub("limit=\d+", f"limit={new_limit}", requrl)
             requrl = re.sub("offset=\d+", f"offset={offset}", requrl)
+            if offset % 100000 == 0:
+                save_incomplete_req(data)
+                data = []
         except Exception as e:
             num_fails += 1
-            print(f"{num_fails} Failed on {requrl}, @{offset}", e, '\n\n')
-            try:
-                prev_data = load_struct("_temp_data_save")
-                data = prev_data + data #preserve order
-            except:
-                pass
-            save_struct(data, "_temp_data_save")
+            save_incomplete_req(data)
             data = []
+            print(f"{num_fails} Failed on {requrl}, @{offset}", e, '\n\n')
             time.sleep(3)
             if num_fails %5 == 0:
                 time.sleep(30)
         time.sleep(1/max_reqs_sec)
-    try:
-        prev_data = load_struct("_temp_data_save")
-        data = prev_data + data #preserve order
-    except:
-        pass
+    data = save_incomplete_req(data, get = True)
     out = pd.DataFrame(data, columns = col_names)
     for c in out.columns:
         if 'date' in c:
             out.loc[:,c] = pd.to_datetime(out.loc[:,c], format="%Y-%m-%d")
     if index_name is not None:
         out = out.set_index(index_name)
-    delete_struct("_temp_data_save", verbal = False)
+    delete_struct(save_name, verbal = False)
     #rearrange datatypes from being indentifier in 1 col, to each having individual col
     # out = out.pivot(index = 'date', columns = 'datatype')
     # out.columns = out.columns.map("_".join)
@@ -249,22 +274,35 @@ def iter_thru_req(requrl, maxresults = None, offset = 0,
                            columns = 'datatype', 
                            values = 'value') #doesn't work w/ non numeric columns?
 
-precipitation_data = []
-#started at 1970
-for yr in range(1988, 2015):
-    start = f'{yr}-01-01'
-    end = f'{yr+1}-01-01'
-    requrl = f'https://www.ncdc.noaa.gov/cdo-web/api/v2/data?datasetid=PRECIP_15&startdate={start}&enddate={end}'
-    if yr == 1988:
-        requrl += '&offset=20900'
-    temp = iter_thru_req(requrl)
-    save_struct(temp, f"precipitation_data_yr{yr}")
-    precipitation_data += [temp]
-    #Only QPCP data till at least 1988
-
-precipitation_data = pd.concat(precipitation_data)
-precipitation_data[precipitation_data==99999] = np.nan
-save_struct(precipitation_data, 'precipitation_data')
+def get_precipitation_data(offset = 0):
+    """offset: for If want to continue part way through with the first year
+    not completed and that has it's data saved in _temp_data_save 
+    by a partially complete iter_thru_req
+    """
+    try:
+        return load_struct('precipitation_data')
+    except:
+        pass
+    #started at 1970 per API, make 1 call that defines all dates for each data type?
+    start, end = 1970, 2015
+    regex = 'precipitation_data_yr\d+'
+    names, precipitation_data = regex_load_struct(regex)
+    start = 1 + max((int(re.search('\d+', i).group(0)) for i in names), 
+                    default = start - 1)
+    
+    for yr in range(start, end):
+        start = f'{yr}-01-01'
+        end = f'{yr+1}-01-01'
+        requrl = f'https://www.ncdc.noaa.gov/cdo-web/api/v2/data?datasetid=PRECIP_15&startdate={start}&enddate={end}'
+        temp = iter_thru_req(requrl)
+        save_struct(temp, f"precipitation_data_yr{yr}")
+        precipitation_data += [temp]
+        #Only QPCP data till at least 1988
+    
+    precipitation_data = pd.concat(precipitation_data)
+    precipitation_data[precipitation_data==99999] = np.nan
+    save_struct(precipitation_data, 'precipitation_data')
+    return precipitation_data
 
  # requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1000' + '&' + yesterstr + '&' + todaystr + '&locationid=FIPS:37'
 # station_df, req = iter_thru_req(requrl, maxresults = 1000)#currently 577 WA stations 
