@@ -11,6 +11,7 @@ import os
 from datetime import datetime, date, timedelta
 import time
 import pdb
+import itertools
 
 abs_path = "C:\\Users\\student.DESKTOP-UT02KBN\\Desktop\\electric_price_preds\\data"
 
@@ -84,7 +85,7 @@ headers = {'token': 'XUxckTkzjdLZvkPvtIpjVwRSawSPGETi'}
 default_lmt_sz = 25
 max_lmt_sz = 1000
 max_reqs_sec = 5#NOAA caps at 5 requests per second
-max_reqs_day = 5#10k per day
+max_reqs_day = 10000#10k per day
 temp = 0
 
 def make_request(requrl):
@@ -120,61 +121,34 @@ def explore_reqs(requrl, dates=False, limit=None):
         return -1
 
 def make_header(counts = {}):
+    #need to reset every 24hrs
     tokens = ["XUxckTkzjdLZvkPvtIpjVwRSawSPGETi",
-              'asdf',
-              'sdfg',
-              'dfgh']
+              'dPOtwdMLrJOJygiBdZYBOhHvmsAwTbXD']
     counts = {i:counts[i] if i in counts else 0 for i in tokens}
-    tokens = iter(tokens)
-    current = next(tokens)
-    runout = None
+    current = tokens[0]
+    last_used = {i:time.time() for i in tokens}
+    token_iter = itertools.cycle(tokens)
     while True:
-        if runout is not None or counts[current] >= max_reqs_day:
-            try:
-                current = next(tokens)
-            except Exception as e:
-                print(counts)
-                raise e
-        runout = (yield {'token': current})
+        if counts[current] >= max_reqs_day:
+            tokens.remove(current)
+            print("Token counts: ", counts)
+            token_iter = itertools.cycle(tokens)
+            current = next(token_iter)            
+        while time.time() - last_used[current] < 1/max_reqs_sec:
+            current = next(token_iter)
+        yield {'token': current}
+        last_used[current] = time.time()
         counts[current] += 1
             
 next_header = make_header()
-# datacategories = explore_reqs("datacategories", dates=False)
-
-# datacategories 
-
-
-#%%
-def write_info(completed_req, filename):
-    "takes a request or a df and writes the info to a file"
-    if isinstance(completed_req, pd.DataFrame):
-        js_df = completed_req
-    else:
-        js_df = pd.DataFrame.from_dict(completed_req.json()['results'])
-    f = open(filename, 'a')#append mode
-    f.write("############################# \n===" + info + '===\n')
-    f.write(js_df.to_csv(sep=',', index = False))
-    f.write("##################################\n")
-    f.close()
-
-
-def write_pickle_file(filename, data, index = None):
-    "both writes and pickles data, filename is in current directory"
-    filename1 = r"Desktop\side_projects\\" + filename + '.p'
-    with open(filename1, 'wb') as filehandler:
-        pickle.dump(data, filehandler)
-    
-    if isinstance(data, pd.DataFrame):
-        print(f"WARNING: the index in the csv is: {index}")
-        data.to_csv(r'Desktop\side_projects\\' + filename + '.txt', index = index)
-    else:
-        f = open(r'Desktop\side_projects\\' + filename + '.txt', 'w')
-        try:
-            f.write(data)
-        except:
-            f.write(str(data))
-        finally:
-            f.close()
+# g = time.time()
+# for i in range(30):
+#     try:
+#         print(next(next_header))
+#     except Exception as e:         
+#         if isinstance(e, StopIteration):
+#             raise Exception("Have run out of token's for the day")
+# print(time.time() - g)
 
 def get_date_stat_val(req):
     "given a request in json, returns list of date, station, and value"
@@ -196,13 +170,13 @@ def iter_thru_req(requrl, maxresults = None,
     assert(requrl[:41] == 'https://www.ncdc.noaa.gov/cdo-web/api/v2/')
     assert('limit' not in requrl)
     
-    save_name = f"_temp_data_save_{requrl}"
+    save_name = f"_temp_data_save"
     def save_incomplete_req(data, get = False):
         try:
             prev_data = load_struct(save_name)
             data = prev_data + data #preserve order
         except:
-            data = []
+            pass
         if get:
             return data
         else:
@@ -215,7 +189,7 @@ def iter_thru_req(requrl, maxresults = None,
     else:
         requrl = re.sub("offset=\d+", f"offset={offset}", requrl)
     requrl += '&limit=' + str(max_lmt_sz) #NOAA only limits number of calls, not size
-    first_js = requests.get(requrl, headers = {'token': weather_token}).json()
+    first_js = requests.get(requrl, headers = next(next_header)).json()
     
     if col_names is None:
         col_names = list(first_js['results'][0].keys())
@@ -234,26 +208,29 @@ def iter_thru_req(requrl, maxresults = None,
     requrl += '&includemetadata=false'#faster
     #what if size changes partway through requests? i.e. more data's added?
     num_fails = 0
+    reps = 0
     while offset < size:
         try:
-            js = requests.get(requrl, headers = {'token': weather_token}).json()
+            js = requests.get(requrl, headers = next(next_header)).json()
             data += js['results']
             new_limit = min(max_lmt_sz, size - offset)#maximium value 
             offset += new_limit
             requrl = re.sub("limit=\d+", f"limit={new_limit}", requrl)
             requrl = re.sub("offset=\d+", f"offset={offset}", requrl)
-            if offset % 100000 == 0:
+            reps += 1
+            if reps % 100 == 0:
                 save_incomplete_req(data)
                 data = []
         except Exception as e:
             num_fails += 1
             save_incomplete_req(data)
+            if isinstance(e, StopIteration):
+                raise Exception("Have run out of token's for the day")
             data = []
             print(f"{num_fails} Failed on {requrl}, @{offset}", e, '\n\n')
             time.sleep(3)
             if num_fails %5 == 0:
                 time.sleep(30)
-        time.sleep(1/max_reqs_sec)
     data = save_incomplete_req(data, get = True)
     out = pd.DataFrame(data, columns = col_names)
     for c in out.columns:
@@ -262,22 +239,13 @@ def iter_thru_req(requrl, maxresults = None,
     if index_name is not None:
         out = out.set_index(index_name)
     delete_struct(save_name, verbal = False)
-    #rearrange datatypes from being indentifier in 1 col, to each having individual col
-    # out = out.pivot(index = 'date', columns = 'datatype')
-    # out.columns = out.columns.map("_".join)
-    # station_cols = [i for i in out if 'station' in i]
-    # out['station'] = out[station_cols].fillna(axis=0, method = 'bfill').iloc[:,0]
-    # out = out.drop(station_cols, axis=1)
-    
-    #am removing 'attributes' column here; don't know what they do
-    return out.pivot_table(index = ['date', 'station'], 
-                           columns = 'datatype', 
-                           values = 'value') #doesn't work w/ non numeric columns?
+    return out 
 
-dataset_dates = {i['id']: (i['mindate'], i['maxdate'])
-                 for i in explore_reqs('datasets')['results']}
+if 'dataset_dates' not in globals():
+    dataset_dates = {i['id']: (i['mindate'], i['maxdate'])
+                     for i in explore_reqs('datasets')['results']}
 
-def get_entire_dataset(dataset_id = 'PRECIP_15', struct_name = 'precipitation_data'):
+def get_entire_dataset(dataset_id, struct_name):
     """Gets all data for a dataset with id dataset_id and places in struct_name
     """
     try:
@@ -289,24 +257,81 @@ def get_entire_dataset(dataset_id = 'PRECIP_15', struct_name = 'precipitation_da
     start, end = int(start[:4]), int(end[:4])
     regex = f'{struct_name}_yr(\d+)'
     names, data = regex_load_struct(regex)
-    start = 1 + max((int(re.search(regex, i).group(0)) for i in names), 
+    start = 1 + max((int(re.search(regex, i).group(1)) for i in names), 
                     default = start - 1)
-    
     for yr in range(start, end):
-        start = f'{yr}-01-01'
+        start = f'{yr}-01-01'#dates must be within 1 yr of each other
         end = f'{yr+1}-01-01'
         requrl = f'https://www.ncdc.noaa.gov/cdo-web/api/v2/data?datasetid={dataset_id}&startdate={start}&enddate={end}'
         temp = iter_thru_req(requrl)
+        if 'dataset_id' == 'PRECIP_15':#since got partway thru dataset doing this
+            temp = temp.pivot_table(
+                                    index = ['date', 'station'], 
+                                    columns = 'datatype', 
+                                    values = 'value')
         save_struct(temp, f"{struct_name}_yr{yr}")
         data += [temp]
         #Only QPCP data till at least 1988
     
     data = pd.concat(data)
-    data[data==99999] = np.nan
     save_struct(data, struct_name)
     return data
 
- # requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1000' + '&' + yesterstr + '&' + todaystr + '&locationid=FIPS:37'
+def get_station_locs():
+    "grib!! currently returns None"
+    struct_name = "station_locations"
+    try:
+        return load_struct(struct_name)
+    except:
+        pass
+    regex = f'{struct_name}_st(\d+)'
+    names, data = regex_load_struct(regex)
+    for fips_id in ['01', '02', '04', '05', '06', '08', '09', '10', '12', '13', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '44', '45', '46', '47', '48', '49', '50', '51', '53', '54', '55', '56', '60', '66', '69', '72', '78']:
+        requrl = f"https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?locationid=FIPS:{fips_id}"
+        try:
+            temp = load_struct(f"{struct_name}_st{fips_id}")
+        except:
+            temp = iter_thru_req(requrl)
+        print(temp)
+        save_struct(temp, f"{struct_name}_st{fips_id}")
+        data += [temp]
+    data = pd.concat(data)
+    save_struct(data, struct_name)
+    return data
+
+def process_data():
+    precipitation_data = get_entire_dataset(dataset_id = 'PRECIP_15', 
+                                     struct_name = 'precipitation_data')
+    precipitation_data[precipitation_data==99999] = np.nan
+    #rearrange datatypes from being indentifier in 1 col, to each having individual col
+    # out = out.pivot(index = 'date', columns = 'datatype')
+    # out.columns = out.columns.map("_".join)
+    # station_cols = [i for i in out if 'station' in i]
+    # out['station'] = out[station_cols].fillna(axis=0, method = 'bfill').iloc[:,0]
+    # out = out.drop(station_cols, axis=1)
+    ###am removing 'attributes' column here; don't know what they do
+    
+    # precipitation_data = precipitation_data.pivot_table(
+    #                                             index = ['date', 'station'], 
+    #                                             columns = 'datatype', 
+    #                                             values = 'value') #doesn't work w/ non numeric columns?
+    
+    print(precipitation_data)
+    station_locs = get_station_locs()
+    assert all(station_locs['elevationUnit'].isin(['METERS', np.nan])), "CHECK Units"
+    #assumes don't care when station started/ended
+    station_locs = station_locs.drop(['mindate', 'maxdate', 'elevationUnit', 'name'],
+                                     axis=1)
+    station_locs = station_locs.set_index('id')
+    precipitation_data =  precipitation_data.join(station_locs, on=['station'])
+    save_struct( precipitation_data, 'all_data')
+    return precipitation_data
+
+# all_data = process_data()
+precipitation_data = get_entire_dataset(dataset_id = 'PRECIP_15', 
+                                     struct_name = 'precipitation_data')
+#%%
+# requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1000' + '&' + yesterstr + '&' + todaystr + '&locationid=FIPS:37'
 # station_df, req = iter_thru_req(requrl, maxresults = 1000)#currently 577 WA stations 
 #station_df.to_csv(r'Desktop\side_projects\station_latlon.txt', index = None)
 #save_struct(station_df, 'stations')

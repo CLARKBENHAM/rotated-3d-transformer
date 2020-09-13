@@ -1,4 +1,16 @@
 #Emacs temp files
-\.#*
+\.\#*
 \#*\#
 *\~
+
+#NOAA Weather Station Normals: ftp://ftp.ncdc.noaa.gov/pub/data/normals/1981-2010/source-datasets/
+/ghcnd_all/*
+/isdlite/*
+*.tar.gz
+
+#Ignore Unproccessed Data
+/data/*
+#But keep processed data
+#!station_locations.p
+#!all_data.p
+#!precipitation_data.p
