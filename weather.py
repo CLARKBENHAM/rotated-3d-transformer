@@ -164,7 +164,10 @@ def iter_thru_req(requrl, maxresults = None,
     index_name: the name of colum to use as index
     col_names: the names of the columns to keep from what's returned
     returns request results on index, columns are data categorizes
+<<<<<<< HEAD
     rerunning if failed partway thru will preserve intermediate results
+=======
+>>>>>>> c880c80d812c609d6b16b0bd7171d148203479a6
     """
     if requrl[:5] != 'https':
         requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/' + requrl
@@ -183,7 +186,11 @@ def iter_thru_req(requrl, maxresults = None,
         else:
             save_struct(data, save_name) 
     
+<<<<<<< HEAD
     data = save_incomplete_req([], get = True)#can rerun and get intermediate results
+=======
+    data = save_incomplete_req([], get = True)
+>>>>>>> c880c80d812c609d6b16b0bd7171d148203479a6
     offset = len(data)
     if 'offset' not in requrl:
         requrl += '&offset=' + str(offset)
@@ -256,7 +263,11 @@ def get_entire_dataset(dataset_id, struct_name):
     #started at 1970 per API, make 1 call that defines all dates for each data type?
     start, end = dataset_dates[dataset_id]
     start, end = int(start[:4]), int(end[:4])
+<<<<<<< HEAD
     regex = f'{struct_name}_yr(\d+)$'
+=======
+    regex = f'{struct_name}_yr(\d+)'
+>>>>>>> c880c80d812c609d6b16b0bd7171d148203479a6
     names, data = regex_load_struct(regex)
     start = 1 + max((int(re.search(regex, i).group(1)) for i in names), 
                     default = start - 1)
@@ -323,7 +334,10 @@ def process_data():
     #assumes don't care when station started/ended
     station_locs = station_locs.drop(['mindate', 'maxdate', 'elevationUnit', 'name'],
                                      axis=1)
+<<<<<<< HEAD
     #could also drop datacoverage?
+=======
+>>>>>>> c880c80d812c609d6b16b0bd7171d148203479a6
     station_locs = station_locs.set_index('id')
     precipitation_data =  precipitation_data.join(station_locs, on=['station'])
     save_struct( precipitation_data, 'all_data')
@@ -333,9 +347,12 @@ def process_data():
 precipitation_data = get_entire_dataset(dataset_id = 'PRECIP_15', 
                                      struct_name = 'precipitation_data')
 #%%
+<<<<<<< HEAD
 
 
 #%%
+=======
+>>>>>>> c880c80d812c609d6b16b0bd7171d148203479a6
 # requrl = 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1000' + '&' + yesterstr + '&' + todaystr + '&locationid=FIPS:37'
 # station_df, req = iter_thru_req(requrl, maxresults = 1000)#currently 577 WA stations 
 #station_df.to_csv(r'Desktop\side_projects\station_latlon.txt', index = None)
